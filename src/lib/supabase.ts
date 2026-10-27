@@ -150,6 +150,19 @@ class SupabaseManager {
     } else {
       this.client = null;
       this.updateStatus('local');
+
+      // Check server API config as fallback (for multi-profile / new windows)
+      if (typeof window !== 'undefined') {
+        fetch('/api/config')
+          .then((res) => (res.ok ? res.json() : null))
+          .then((data) => {
+            if (data?.isConfigured && data.url && data.anonKey) {
+              console.log('🌐 Server-side Supabase configuration found, connecting automatically...');
+              this.setCredentials(data.url, data.anonKey);
+            }
+          })
+          .catch(() => {});
+      }
     }
   }
 
@@ -223,6 +236,13 @@ class SupabaseManager {
     if (typeof window !== 'undefined') {
       localStorage.setItem(STORAGE_KEY_URL, cleanUrl);
       localStorage.setItem(STORAGE_KEY_KEY, cleanKey);
+
+      // Persist to server config so any other device/account can connect automatically
+      fetch('/api/config', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: cleanUrl, anonKey: cleanKey }),
+      }).catch(() => {});
     }
 
     if (cleanUrl && cleanKey) {

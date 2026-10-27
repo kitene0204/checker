@@ -1,11 +1,12 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { Student, Assignment, Submission, BoardTheme } from './types';
-import { supabaseManager } from './lib/supabase';
+import { supabaseManager, RealtimeStatus } from './lib/supabase';
 import { Header } from './components/Header';
 import { BlackboardGrid } from './components/BlackboardGrid';
 import { TeacherModal } from './components/TeacherModal';
 import { SqlGuideModal } from './components/SqlGuideModal';
 import { UnsubmittedModal } from './components/UnsubmittedModal';
+import { AlertCircle, ArrowRight, X } from 'lucide-react';
 
 export default function App() {
   const [students, setStudents] = useState<Student[]>([]);
@@ -13,6 +14,8 @@ export default function App() {
   const [activeAssignment, setActiveAssignment] = useState<Assignment | null>(null);
   const [submissions, setSubmissions] = useState<Submission[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const [realtimeStatus, setRealtimeStatus] = useState<RealtimeStatus>(supabaseManager.getStatus());
+  const [dismissWarning, setDismissWarning] = useState(false);
 
   // Modals state
   const [isTeacherModalOpen, setIsTeacherModalOpen] = useState(false);
@@ -29,6 +32,14 @@ export default function App() {
     setTheme(newTheme);
     localStorage.setItem('classroom_chalkboard_theme', newTheme);
   };
+
+  // Listen to realtime status
+  useEffect(() => {
+    const unsub = supabaseManager.onStatusChange((status) => {
+      setRealtimeStatus(status);
+    });
+    return () => unsub();
+  }, []);
 
   // Fetch all current data
   const fetchData = useCallback(async () => {
@@ -65,7 +76,7 @@ export default function App() {
   useEffect(() => {
     fetchData();
 
-    // Subscribe to realtime changes (Supabase postgres_changes + BroadcastChannel)
+    // Subscribe to realtime changes (Supabase postgres_changes + Broadcast + BroadcastChannel)
     const handleRealtimeUpdate = () => {
       fetchData();
     };
@@ -146,6 +157,33 @@ export default function App() {
 
   return (
     <div className={`min-h-screen flex flex-col transition-colors duration-300 font-sans ${getThemeBackground()}`}>
+      {/* Top Warning Banner if this specific browser window is in Local Mode */}
+      {realtimeStatus === 'local' && !dismissWarning && (
+        <div className="bg-amber-500/90 text-slate-950 px-4 py-2 text-xs font-bold flex items-center justify-between shadow-md">
+          <div className="flex items-center gap-2 max-w-4xl mx-auto">
+            <AlertCircle className="w-4 h-4 shrink-0" />
+            <span>
+              현재 창은 <strong>[로컬 모드]</strong>로 동작 중입니다. 다른 창이나 전자칠판과 실시간 동기화하려면 Supabase 키를 입력하거나 연동 링크로 접속해야 합니다.
+            </span>
+            <button
+              type="button"
+              onClick={() => setIsTeacherModalOpen(true)}
+              className="ml-2 underline underline-offset-2 hover:text-black flex items-center gap-1 cursor-pointer shrink-0"
+            >
+              연동 설정하기 <ArrowRight className="w-3 h-3" />
+            </button>
+          </div>
+          <button
+            type="button"
+            onClick={() => setDismissWarning(true)}
+            className="p-1 hover:bg-black/10 rounded-lg text-slate-900"
+            title="닫기"
+          >
+            <X className="w-3.5 h-3.5" />
+          </button>
+        </div>
+      )}
+
       {/* Top Navbar Header */}
       <Header
         assignments={assignments}
