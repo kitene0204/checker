@@ -1,0 +1,6 @@
+{
+  "name": "우리반 전자칠판 과제 제출 체크",
+  "description": "우리반 학생 명렬표 관리 및 전자칠판 터치 기반 실시간 과제 제출 확인 웹앱 (Supabase Realtime 지원)",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
