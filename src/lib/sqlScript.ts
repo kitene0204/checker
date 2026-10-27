@@ -2,12 +2,13 @@
  * Supabase SQL Script
  * 
  * 특징:
- * 1. 학생 로그인 없이(No-Auth) 전자칠판에서 자유롭게 클릭할 수 있도록 RLS 비활성화 (Run without RLS)
- * 2. 모든 브라우저 및 전자칠판 간 즉시 동기화되도록 supabase_realtime Publication 등록
- * 3. 우리반 기본 학생 20명 및 첫 번째 과제 샘플 데이터 자동 포함
+ * 1. 학생 로그인 없이(No-Auth) 전자칠판에서 자유롭게 클릭할 수 있도록 RLS 완전 비활성화 (Run without RLS)
+ * 2. 익명 사용자(anon) 및 모든 역할에 완전한 읽기/쓰기/수정/삭제 권한 부여 (GRANT ALL)
+ * 3. 모든 브라우저 및 전자칠판 간 즉시 동기화되도록 REPLICA IDENTITY FULL 및 supabase_realtime Publication 등록
+ * 4. 우리반 기본 학생 20명 및 첫 번째 과제 샘플 데이터 자동 포함
  */
 export const SUPABASE_SQL_SCRIPT = `-- ========================================================
--- 우리반 전자칠판 과제 제출 체크 시스템 (Supabase DDL & RLS 해제)
+-- 우리반 전자칠판 과제 제출 체크 시스템 (Supabase DDL & RLS 완전 해제)
 -- ========================================================
 
 -- 1. 학생 명렬표 테이블 생성
@@ -38,20 +39,31 @@ CREATE TABLE IF NOT EXISTS public.submissions (
     CONSTRAINT unique_student_assignment UNIQUE(student_id, assignment_id)
 );
 
--- 4. [중요] RLS(Row Level Security) 비활성화
--- 학생이 로그인(Auth) 절차 없이 전자칠판에서 바로 터치/제출할 수 있도록 설정
+-- 4. [핵심] RLS(Row Level Security) 완전 비활성화
+-- 학생이 별도의 로그인/계정 생성 없이 전자칠판이나 모바일에서 즉시 제출할 수 있도록 보안 잠금 해제
 ALTER TABLE public.students DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.assignments DISABLE ROW LEVEL SECURITY;
 ALTER TABLE public.submissions DISABLE ROW LEVEL SECURITY;
 
--- 5. [중요] Supabase Realtime 실시간 동기화 등록
--- 다른 브라우저, 스마트폰, 전자칠판 간 0.1초 즉각 반영
+-- 5. [권한 허용] 익명(anon) 클라이언트에게 완전한 CRUD 접근 권한 부여
+GRANT ALL ON TABLE public.students TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.assignments TO anon, authenticated, service_role;
+GRANT ALL ON TABLE public.submissions TO anon, authenticated, service_role;
+GRANT ALL ON ALL SEQUENCES IN SCHEMA public TO anon, authenticated, service_role;
+
+-- 6. [실시간 레코드 복제 설정] 실시간 이벤트 시 전체 변경 행 데이터 전송
+ALTER TABLE public.students REPLICA IDENTITY FULL;
+ALTER TABLE public.assignments REPLICA IDENTITY FULL;
+ALTER TABLE public.submissions REPLICA IDENTITY FULL;
+
+-- 7. [실시간 구독 활성화] Supabase Realtime Publication 등록
+-- 연결된 모든 브라우저와 전자칠판이 변경 사항을 즉시(0.1초) 수신하도록 설정
 BEGIN;
   DROP PUBLICATION IF EXISTS supabase_realtime;
   CREATE PUBLICATION supabase_realtime FOR TABLE public.students, public.assignments, public.submissions;
 COMMIT;
 
--- 6. 초기 샘플 데이터 입력 (필요시 수정 가능)
+-- 8. 초기 샘플 데이터 입력 (필요시 수정 가능)
 -- (1) 기본 과제 생성
 INSERT INTO public.assignments (id, title, description, is_active)
 VALUES 
@@ -83,5 +95,5 @@ INSERT INTO public.students (student_number, name) VALUES
 ON CONFLICT DO NOTHING;
 
 -- 완료 안내 메시지
-SELECT '우리반 전자칠판 테이블 생성 및 Realtime 설정 완료!' AS result;
+SELECT '우리반 전자칠판 테이블 생성, RLS 완전 해제 및 Realtime 등록 완료!' AS result;
 `;

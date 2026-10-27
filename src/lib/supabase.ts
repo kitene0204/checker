@@ -7,7 +7,8 @@ const LOCAL_STUDENTS_KEY = 'classroom_local_students';
 const LOCAL_ASSIGNMENTS_KEY = 'classroom_local_assignments';
 const LOCAL_SUBMISSIONS_KEY = 'classroom_local_submissions';
 
-// Initial fallback mock data for classroom
+export type RealtimeStatus = 'connected' | 'connecting' | 'disconnected' | 'local';
+
 export const DEFAULT_STUDENTS: Student[] = [
   { id: 's-01', student_number: 1, name: '강민준' },
   { id: 's-02', student_number: 2, name: '고서연' },
@@ -33,7 +34,7 @@ export const DEFAULT_STUDENTS: Student[] = [
 
 export const DEFAULT_ASSIGNMENTS: Assignment[] = [
   {
-    id: 'a-01',
+    id: '11111111-1111-1111-1111-111111111111',
     title: '수학 익힘책 42~45쪽',
     description: '채점 후 틀린 문제 고치고 제출하기',
     is_active: true,
@@ -52,7 +53,6 @@ export const DEFAULT_ASSIGNMENTS: Assignment[] = [
   },
 ];
 
-// BroadcastChannel for cross-tab sync in local/demo mode
 let localBroadcastChannel: BroadcastChannel | null = null;
 try {
   if (typeof window !== 'undefined' && 'BroadcastChannel' in window) {
@@ -67,7 +67,9 @@ class SupabaseManager {
   private realtimeChannel: RealtimeChannel | null = null;
   private url: string = '';
   private anonKey: string = '';
+  private currentStatus: RealtimeStatus = 'local';
   private onDataChangeCallbacks: Set<() => void> = new Set();
+  private onStatusChangeCallbacks: Set<(status: RealtimeStatus) => void> = new Set();
 
   constructor() {
     this.initCredentials();
@@ -87,25 +89,55 @@ class SupabaseManager {
     const storedUrl = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_URL) || '' : '';
     const storedKey = typeof window !== 'undefined' ? localStorage.getItem(STORAGE_KEY_KEY) || '' : '';
 
-    this.url = storedUrl || envUrl;
-    this.anonKey = storedKey || envKey;
+    this.url = (storedUrl || envUrl).trim();
+    this.anonKey = (storedKey || envKey).trim();
 
     if (this.url && this.anonKey) {
       try {
         this.client = createClient(this.url, this.anonKey, {
+          auth: {
+            persistSession: false,
+            autoRefreshToken: false,
+          },
           realtime: {
             params: {
               eventsPerSecond: 10,
             },
           },
         });
+        this.updateStatus('connecting');
       } catch (err) {
         console.error('Failed to initialize Supabase client:', err);
         this.client = null;
+        this.updateStatus('local');
       }
     } else {
       this.client = null;
+      this.updateStatus('local');
     }
+  }
+
+  public getStatus(): RealtimeStatus {
+    return this.currentStatus;
+  }
+
+  private updateStatus(newStatus: RealtimeStatus) {
+    this.currentStatus = newStatus;
+    this.onStatusChangeCallbacks.forEach((cb) => {
+      try {
+        cb(newStatus);
+      } catch (e) {
+        console.error(e);
+      }
+    });
+  }
+
+  public onStatusChange(callback: (status: RealtimeStatus) => void) {
+    this.onStatusChangeCallbacks.add(callback);
+    callback(this.currentStatus);
+    return () => {
+      this.onStatusChangeCallbacks.delete(callback);
+    };
   }
 
   public getCredentials() {
@@ -130,17 +162,24 @@ class SupabaseManager {
     if (cleanUrl && cleanKey) {
       try {
         this.client = createClient(cleanUrl, cleanKey, {
+          auth: {
+            persistSession: false,
+            autoRefreshToken: false,
+          },
           realtime: {
             params: {
               eventsPerSecond: 10,
             },
           },
         });
+        this.updateStatus('connecting');
       } catch {
         this.client = null;
+        this.updateStatus('local');
       }
     } else {
       this.client = null;
+      this.updateStatus('local');
     }
 
     this.subscribeRealtime();
@@ -156,14 +195,16 @@ class SupabaseManager {
     }
 
     try {
-      const tempClient = createClient(targetUrl, targetKey);
-      const { data, error } = await tempClient.from('students').select('id').limit(1);
+      const tempClient = createClient(targetUrl, targetKey, {
+        auth: { persistSession: false },
+      });
+      const { error } = await tempClient.from('students').select('id').limit(1);
 
       if (error) {
         if (error.code === 'PGRST116' || error.message.includes('relation "public.students" does not exist')) {
           return {
             success: false,
-            message: '연결은 되었으나 students 테이블이 없습니다. 상단 SQL 스크립트를 복사하여 Supabase SQL Editor에서 실행해주세요.',
+            message: '연결은 되었으나 students 테이블이 없습니다. SQL 스크립트를 Supabase SQL Editor에서 실행해주세요.',
           };
         }
         return { success: false, message: `오류: ${error.message}` };
@@ -171,7 +212,7 @@ class SupabaseManager {
 
       return {
         success: true,
-        message: '성공적으로 Supabase에 연결되었습니다! (students 테이블 확인됨)',
+        message: '성공적으로 Supabase에 연결되었습니다! (students 테이블 및 RLS 비활성화 확인됨)',
       };
     } catch (err: unknown) {
       const msg = err instanceof Error ? err.message : String(err);
@@ -179,12 +220,17 @@ class SupabaseManager {
     }
   }
 
+  /**
+   * Supabase Realtime 채널 구독
+   * submissions, students, assignments 3개 테이블의 모든 변경 사항을 즉시 수신
+   */
   public subscribeRealtime(callback?: () => void) {
     if (callback) {
       this.onDataChangeCallbacks.add(callback);
     }
 
     if (!this.client) {
+      this.updateStatus('local');
       return;
     }
 
@@ -194,36 +240,45 @@ class SupabaseManager {
     }
 
     try {
+      this.updateStatus('connecting');
       this.realtimeChannel = this.client
-        .channel('classroom-changes')
+        .channel('classroom-realtime-room')
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'submissions' },
-          () => {
+          (payload) => {
+            console.log('⚡ Realtime submission change received:', payload.eventType);
             this.notifyChange();
           }
         )
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'students' },
-          () => {
+          (payload) => {
+            console.log('⚡ Realtime student change received:', payload.eventType);
             this.notifyChange();
           }
         )
         .on(
           'postgres_changes',
           { event: '*', schema: 'public', table: 'assignments' },
-          () => {
+          (payload) => {
+            console.log('⚡ Realtime assignment change received:', payload.eventType);
             this.notifyChange();
           }
         )
         .subscribe((status) => {
           if (status === 'SUBSCRIBED') {
-            console.log('✅ Supabase Realtime connected');
+            console.log('🟢 Supabase Realtime 채널 연결 완료!');
+            this.updateStatus('connected');
+          } else if (status === 'CLOSED' || status === 'CHANNEL_ERROR' || status === 'TIMED_OUT') {
+            console.warn('⚠️ Realtime channel status:', status);
+            this.updateStatus('disconnected');
           }
         });
     } catch (e) {
       console.warn('Realtime subscription error:', e);
+      this.updateStatus('disconnected');
     }
   }
 
@@ -242,7 +297,6 @@ class SupabaseManager {
       }
     });
 
-    // Notify other tabs in local mode
     if (localBroadcastChannel) {
       try {
         localBroadcastChannel.postMessage({ type: 'SYNC_DATA', timestamp: Date.now() });
@@ -265,7 +319,6 @@ class SupabaseManager {
       console.warn('Supabase fetch students failed, using fallback:', error?.message);
     }
 
-    // Local fallback
     const saved = localStorage.getItem(LOCAL_STUDENTS_KEY);
     if (saved) {
       try {
@@ -277,17 +330,15 @@ class SupabaseManager {
   }
 
   public async saveStudents(students: Student[]): Promise<boolean> {
-    // Sort by student number
     students.sort((a, b) => a.student_number - b.student_number);
 
     if (this.client) {
       try {
-        // Delete all and re-insert or upsert
         const { error: delError } = await this.client.from('students').delete().neq('student_number', -999);
         if (!delError) {
           const { error: insertError } = await this.client.from('students').insert(
             students.map((s) => ({
-              id: s.id.includes('-') && s.id.length > 20 ? s.id : undefined,
+              id: s.id.length > 20 ? s.id : undefined,
               student_number: s.student_number,
               name: s.name,
             }))
@@ -302,7 +353,6 @@ class SupabaseManager {
       }
     }
 
-    // Local fallback
     localStorage.setItem(LOCAL_STUDENTS_KEY, JSON.stringify(students));
     this.notifyChange();
     return true;
@@ -389,7 +439,6 @@ class SupabaseManager {
 
     if (this.client) {
       try {
-        // Deactivate others
         await this.client.from('assignments').update({ is_active: false }).neq('id', 'dummy');
         const { data, error } = await this.client
           .from('assignments')
@@ -410,7 +459,6 @@ class SupabaseManager {
       }
     }
 
-    // Local fallback
     const assignments = await this.getAssignments();
     const deactivated = assignments.map((a) => ({ ...a, is_active: false }));
     deactivated.unshift(newAssignment);
@@ -437,7 +485,6 @@ class SupabaseManager {
     }
     localStorage.setItem(LOCAL_ASSIGNMENTS_KEY, JSON.stringify(filtered));
 
-    // Also remove submissions
     const submissions = await this.getSubmissions();
     const filteredSubs = submissions.filter((s) => s.assignment_id !== id);
     localStorage.setItem(LOCAL_SUBMISSIONS_KEY, JSON.stringify(filteredSubs));
@@ -480,7 +527,6 @@ class SupabaseManager {
 
     if (this.client) {
       try {
-        // Upsert submission
         const { error } = await this.client.from('submissions').upsert(
           {
             student_id: studentId,
@@ -498,11 +544,10 @@ class SupabaseManager {
           console.error('Supabase upsert submission error:', error);
         }
       } catch (e) {
-        console.error('Supabase submission toggle caught:', e);
+        console.error('Supabase submission toggle error:', e);
       }
     }
 
-    // Local fallback
     const submissions = await this.getSubmissions();
     const existingIndex = submissions.findIndex(
       (s) => s.student_id === studentId && s.assignment_id === assignmentId
