@@ -15,9 +15,12 @@ import {
   Sparkles,
   Check,
   FileCode,
+  Link,
+  Share2,
+  Copy,
 } from 'lucide-react';
 import { Student, Assignment } from '../types';
-import { supabaseManager, DEFAULT_STUDENTS } from '../lib/supabase';
+import { supabaseManager, DEFAULT_STUDENTS, generateUUID } from '../lib/supabase';
 import { SqlGuideModal } from './SqlGuideModal';
 
 interface TeacherModalProps {
@@ -48,6 +51,7 @@ export const TeacherModal: React.FC<TeacherModalProps> = ({
   const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
   const [isTesting, setIsTesting] = useState(false);
   const [showSqlModal, setShowSqlModal] = useState(false);
+  const [copiedShareUrl, setCopiedShareUrl] = useState(false);
 
   // Roster form state
   const [newNumber, setNewNumber] = useState(students.length + 1);
@@ -69,7 +73,7 @@ export const TeacherModal: React.FC<TeacherModalProps> = ({
     if (!newName.trim()) return;
 
     const newStudent: Student = {
-      id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `st-${Date.now()}`,
+      id: generateUUID(),
       student_number: Number(newNumber) || students.length + 1,
       name: newName.trim(),
     };
@@ -96,13 +100,13 @@ export const TeacherModal: React.FC<TeacherModalProps> = ({
     const lines = bulkText.split(/\r?\n/).filter((l) => l.trim().length > 0);
     const parsedStudents: Student[] = [];
 
-    lines.forEach((line, index) => {
+    lines.forEach((line) => {
       const trimmed = line.trim();
       // Match patterns like "1 김민준", "1. 김민준", "1번 김민준" or tab-separated "1\t김민준"
       const match = trimmed.match(/^(\d+)[.\s\t번_-]+(.+)$/);
       if (match) {
         parsedStudents.push({
-          id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `st-${Date.now()}-${index}`,
+          id: generateUUID(),
           student_number: parseInt(match[1], 10),
           name: match[2].trim(),
         });
@@ -112,14 +116,14 @@ export const TeacherModal: React.FC<TeacherModalProps> = ({
         if (items.length > 1) {
           items.forEach((item) => {
             parsedStudents.push({
-              id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `st-${Date.now()}-${parsedStudents.length}`,
+              id: generateUUID(),
               student_number: parsedStudents.length + 1,
               name: item,
             });
           });
         } else {
           parsedStudents.push({
-            id: typeof crypto !== 'undefined' && crypto.randomUUID ? crypto.randomUUID() : `st-${Date.now()}-${index}`,
+            id: generateUUID(),
             student_number: parsedStudents.length + 1,
             name: trimmed,
           });
@@ -631,6 +635,34 @@ export const TeacherModal: React.FC<TeacherModalProps> = ({
                     </button>
                   )}
                 </div>
+
+                {/* Blackboard One-Click Sync Link */}
+                {supabaseManager.getCredentials().isConfigured && (
+                  <div className="p-4 rounded-2xl bg-emerald-950/40 border border-emerald-500/40 space-y-2.5">
+                    <div className="flex items-center justify-between">
+                      <span className="text-xs font-bold text-emerald-300 flex items-center gap-1.5">
+                        <Share2 className="w-4 h-4 text-emerald-400" />
+                        전자칠판(스마트TV / 태블릿) 즉시 연결 링크
+                      </span>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          const shareUrl = supabaseManager.getShareableBlackboardUrl();
+                          navigator.clipboard.writeText(shareUrl);
+                          setCopiedShareUrl(true);
+                          setTimeout(() => setCopiedShareUrl(false), 2500);
+                        }}
+                        className="flex items-center gap-1.5 px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-xs font-bold text-white transition-colors cursor-pointer shadow-sm"
+                      >
+                        {copiedShareUrl ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
+                        {copiedShareUrl ? '링크 복사됨!' : '전자칠판 접속 링크 복사'}
+                      </button>
+                    </div>
+                    <p className="text-xs text-emerald-100/80 leading-relaxed">
+                      💡 이 링크를 복사하여 전자칠판 브라우저나 즐겨찾기에 열면, <strong>복잡한 API 키를 직접 타이핑할 필요 없이 즉시 동일한 실시간 데이터베이스에 연결</strong>되어 양방향 동기화됩니다.
+                    </p>
+                  </div>
+                )}
 
                 {/* Form Inputs */}
                 <div className="space-y-4">
